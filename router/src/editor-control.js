@@ -138,6 +138,71 @@ function resolveTarget(args) {
 
 // ── execPath 解析（三级 fallback）───────────────────────────────
 
+function uniqExisting(paths) {
+    var seen = {};
+    var out = [];
+    (paths || []).forEach(function (p) {
+        if (!p || seen[p]) return;
+        seen[p] = true;
+        try { if (fs.existsSync(p)) out.push(p); } catch (e) { /* ignore */ }
+    });
+    return out;
+}
+
+function registryExecPathEntries(version) {
+    return readRegistryEntries().filter(function (e) {
+        if (!e.execPath || !fs.existsSync(e.execPath)) return false;
+        if (version && e.editorVersion !== version && e.execPath.indexOf(version) < 0) return false;
+        return true;
+    });
+}
+
+function buildCocosExecPathCandidates(version, platform, env, homeDir) {
+    var candidates = [];
+    var versions = version ? [version] : [];
+    env = env || {};
+    homeDir = homeDir || os.homedir();
+
+    if (platform === 'win32') {
+        var roots = [];
+        if (env.ProgramFiles) roots.push(env.ProgramFiles);
+        if (env['ProgramFiles(x86)']) roots.push(env['ProgramFiles(x86)']);
+        if (env.LOCALAPPDATA) roots.push(path.win32.join(env.LOCALAPPDATA, 'Programs'));
+
+        roots.forEach(function (root) {
+            versions.forEach(function (v) {
+                candidates.push(path.win32.join(root, 'Cocos', 'Creator', v, 'CocosCreator.exe'));
+                candidates.push(path.win32.join(root, 'CocosCreator_' + v, 'CocosCreator.exe'));
+            });
+        });
+
+        // Windows 流程验证过的公司内便携安装路径，作为版本化冷启动兜底。
+        versions.forEach(function (v) {
+            candidates.push(path.win32.join('H:\\', 'cocos', 'editors', 'Creator', v, 'CocosCreator.exe'));
+            candidates.push(path.win32.join('D:\\', 'cocos', 'editors', 'Creator', v, 'CocosCreator.exe'));
+            candidates.push(path.win32.join('C:\\', 'cocos', 'editors', 'Creator', v, 'CocosCreator.exe'));
+        });
+    } else if (platform === 'darwin') {
+        versions.forEach(function (v) {
+            candidates.push('/Applications/Cocos/Creator/' + v + '/CocosCreator.app/Contents/MacOS/CocosCreator');
+            candidates.push('/Applications/CocosCreator/Creator/' + v + '/CocosCreator.app/Contents/MacOS/CocosCreator');
+            candidates.push('/Applications/CocosCreator_' + v + '.app/Contents/MacOS/CocosCreator');
+        });
+    } else {
+        versions.forEach(function (v) {
+            candidates.push('/opt/Cocos/Creator/' + v + '/CocosCreator');
+            candidates.push('/opt/cocos/creator/' + v + '/CocosCreator');
+            candidates.push(path.posix.join(homeDir, 'Cocos', 'Creator', v, 'CocosCreator'));
+        });
+    }
+
+    return candidates;
+}
+
+function scanCocosExecPaths(version) {
+    return uniqExisting(buildCocosExecPathCandidates(version, process.platform, process.env, os.homedir()));
+}
+
 /** 从运行中进程的命令行抓可执行路径（编辑器启动命令首段，--project 之前） */
 function execPathFromPs(pid) {
     try {
@@ -220,19 +285,34 @@ async function killEditor(pid, opts) {
 }
 
 /**
- * 冷启动场景解析 execPath：进程已不在，没有活进程可 ps 抓，靠两级 fallback：
+ * 冷启动场景解析 execPath：进程已不在，没有活进程可 ps 抓，靠多级 fallback：
  *   1. args.execPath 显式
- *   2. 借任意一条注册 entry 的 execPath —— execPath 是机器级安装路径，跨项目通用、跨平台，
- *      哪怕那条 entry 是别的项目 / 已 stale 也能用
+ *   2. args.version 匹配注册表中同版本 execPath
+ *   3. args.version 按当前平台常见安装目录扫描
+ *   4. 未指定 version 时，若注册表只有一个可用 execPath，则借用它
  */
 function resolveExecPathForSpawn(args, projectPath) {
     if (args.execPath && fs.existsSync(args.execPath)) return args.execPath;
 
-    // 借任意一条注册 entry 的 execPath（机器级安装路径，跨项目通用、跨平台）
-    var borrowed = readRegistryEntries().filter(function (e) { return e.execPath && fs.existsSync(e.execPath); })[0];
-    if (borrowed) return borrowed.execPath;
+    var version = args.version || '';
+    if (version) {
+        var sameVersion = registryExecPathEntries(version)[0];
+        if (sameVersion) return sameVersion.execPath;
 
-    throw new Error('editor_spawn: 无法解析 Cocos 可执行路径。请传 execPath（注册表无可借项时无法推断安装路径）。');
+        var scanned = scanCocosExecPaths(version)[0];
+        if (scanned) return scanned;
+
+        throw new Error('editor_spawn: 找不到 Cocos Creator ' + version + '。请传 execPath，或先用该版本打开任意项目让扩展写入注册表。');
+    }
+
+    var borrowed = registryExecPathEntries('');
+    if (borrowed.length === 1) return borrowed[0].execPath;
+    if (borrowed.length > 1) {
+        throw new Error('editor_spawn: 检测到多个 Cocos Creator 安装路径，请传 version 或 execPath 明确指定。可用版本: ' +
+            borrowed.map(function (e) { return (e.editorVersion || '?') + '=' + e.execPath; }).join(', '));
+    }
+
+    throw new Error('editor_spawn: 无法解析 Cocos 可执行路径。请传 version 或 execPath。');
 }
 
 /**
@@ -572,6 +652,7 @@ module.exports = {
     resolveTarget: resolveTarget,
     resolveExecPath: resolveExecPath,
     resolveExecPathForSpawn: resolveExecPathForSpawn,
+    buildCocosExecPathCandidates: buildCocosExecPathCandidates,
     buildEditorSpawnArgs: buildEditorSpawnArgs,
     waitReady: waitReady,
     probeReady: probeReady,
