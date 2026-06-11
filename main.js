@@ -431,6 +431,19 @@ async function startMcpServer() {
     var toolDefs = tdef.defineTools(ctx);
     var resourceDefs = tdef.defineResources(ctx);
 
+    // 只计真实的工具调用 / 资源读取，不计 router 每 15s 的 initialize/tools-list 探活——
+    // 否则计数永远在涨，无法用于判断「业务指令到没到编辑器」。
+    // lastRequestAt/lastTool 是判活主信号（曾因 requestCount 初始化后无人自增、恒 0，被当成转发断裂误诊）。
+    var stats = { startedAt: new Date().toISOString(), requestCount: 0, lastRequestAt: null, lastTool: null };
+    function countCall(name, fn) {
+        return function () {
+            stats.requestCount++;
+            stats.lastRequestAt = new Date().toISOString();
+            stats.lastTool = name;
+            return fn.apply(this, arguments);
+        };
+    }
+
     var server = sdk.createServer({
         name: 'cc-3-8-x-mcp',
         version: '2.0.0',
@@ -440,7 +453,7 @@ async function startMcpServer() {
                 name: t.name,
                 description: t.description,
                 inputSchema: t.inputSchema,
-                handler: t.handler,
+                handler: countCall(t.name, t.handler),
             };
         }),
         resources: resourceDefs.map(function (r) {
@@ -449,7 +462,7 @@ async function startMcpServer() {
                 name: r.name,
                 description: r.description,
                 mimeType: r.mimeType,
-                read: r.read,
+                read: countCall('resource:' + r.uri, r.read),
             };
         }),
     });
@@ -462,7 +475,7 @@ async function startMcpServer() {
         port: port,
         toolCount: toolDefs.length,
         resourceCount: resourceDefs.length,
-        stats: { startedAt: new Date().toISOString(), requestCount: 0 },
+        stats: stats,
         stop: function () { server.stop(); },
     };
     writeRegistry();
