@@ -50,11 +50,14 @@ function _extractCcClassNames(src) {
   return names;
 }
 
-/** 在 assetsDir 下找所有 .ts（跳过 .d.ts），返回绝对路径数组。 */
-function _listTsFiles(assetsDir) {
+/** 在 scanDirs 下找所有 .ts（跳过 .d.ts），返回绝对路径数组。 */
+function _listTsFiles(scanDirs) {
+  const existingDirs = scanDirs.filter((dir) => fs.existsSync(dir));
+  if (existingDirs.length === 0) return [];
+  const roots = existingDirs.map((dir) => `"${dir.replace(/"/g, '\\"')}"`).join(' ');
   try {
     const raw = execSync(
-      `find "${assetsDir}" -name "*.ts" -not -name "*.d.ts" -type f`,
+      `find ${roots} -name "*.ts" -not -name "*.d.ts" -type f`,
       { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }
     );
     return raw.trim().split('\n').filter(Boolean);
@@ -66,9 +69,11 @@ function _listTsFiles(assetsDir) {
 /** 建 projectRoot 下的 className -> entry 索引。 */
 function _buildIndex(projectRoot) {
   const scriptsDir = path.join(projectRoot, 'assets', 'scripts');
-  const scanDir = fs.existsSync(scriptsDir) ? scriptsDir : path.join(projectRoot, 'assets');
+  const scanDirs = fs.existsSync(scriptsDir)
+    ? [scriptsDir, path.join(projectRoot, 'extensions')]
+    : [path.join(projectRoot, 'assets'), path.join(projectRoot, 'extensions')];
 
-  const tsFiles = _listTsFiles(scanDir);
+  const tsFiles = _listTsFiles(scanDirs);
   const index = new Map();
 
   for (const tsPath of tsFiles) {

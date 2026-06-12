@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const { editPrefab } = require('../src/editor/index.js');
 const { parsePrefab } = require('../src/parse.js');
 const { listOverrides } = require('../src/overrides.js');
+const { addRootTargetOverride, resolveLocalIdChain } = require('../src/editor/nested.js');
 
 const FIXTURE_PATH = path.resolve(__dirname, 'fixtures/HomeUI.prefab');
 
@@ -431,6 +432,27 @@ test('remove-node: 普通节点 → 父 _children 不再含引用', () => {
   assert.equal(orphan._parent, null, '孤儿节点 _parent 应为 null');
 });
 
+test('remove-node: 兼容旧文档 node 字段', () => {
+  const tmp = path.join(os.tmpdir(), `remove-node-alias-${crypto.randomBytes(4).toString('hex')}.prefab`);
+  tmpFiles.push(tmp);
+  const data = [
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [], _prefab: { __id__: 3 } },
+    { __type__: 'cc.Node', _name: 'toDeleteByNodeAlias', _parent: { __id__: 1 }, _children: [], _components: [], _prefab: { __id__: 4 } },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'rootFileId', instance: null, targetOverrides: null, nestedPrefabInstanceRoots: null },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, asset: { __id__: 0 }, fileId: 'childFileId', instance: null, targetOverrides: null, nestedPrefabInstanceRoots: null },
+  ];
+  fs.writeFileSync(tmp, JSON.stringify(data));
+
+  editPrefab(tmp, [
+    { op: 'remove-node', node: 'toDeleteByNodeAlias' },
+  ]);
+
+  const reparsed = parsePrefab(tmp);
+  const orphan = reparsed.elements[2];
+  assert.equal(orphan._parent, null, '旧 node 字段写法也应正确删除节点');
+});
+
 test('remove-node: stub 子节点（mountedChildren 内） → mountedChildren 移除', () => {
   const tmp = cloneFixture('remove-stub-child');
   tmpFiles.push(tmp);
@@ -515,6 +537,67 @@ test('remove-node: 删嵌套 stub → 清根 targetOverrides 中指向它的悬�
     0,
     'nestedPrefabInstanceRoots 应清空孤儿 stub'
   );
+});
+
+test('set-component-ref: refSubNode 数组可定位嵌套 prefab 内普通子节点路径', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'nested-path-project-'));
+  tmpFiles.push(path.join(project, 'assets', 'host.prefab'));
+  fs.writeFileSync(path.join(project, 'package.json'), '{}');
+  fs.mkdirSync(path.join(project, 'assets', 'nested'), { recursive: true });
+
+  const nestedUuid = '11111111-2222-4333-8444-555555555555';
+  const nestedPath = path.join(project, 'assets', 'nested', 'Reddot.prefab');
+  const nestedData = [
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Reddot', _parent: null, _children: [{ __id__: 2 }], _components: [], _prefab: { __id__: 6 } },
+    { __type__: 'cc.Node', _name: 'content', _parent: { __id__: 1 }, _children: [{ __id__: 3 }], _components: [], _prefab: { __id__: 7 } },
+    { __type__: 'cc.Node', _name: 'title', _parent: { __id__: 2 }, _children: [], _components: [{ __id__: 4 }], _prefab: { __id__: 8 } },
+    { __type__: 'cc.Label', node: { __id__: 3 }, __prefab: { __id__: 5 } },
+    { __type__: 'cc.CompPrefabInfo', fileId: 'labelTitleFileId' },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'rootFileId', instance: null },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, asset: { __id__: 0 }, fileId: 'contentFileId', instance: null },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 3 }, asset: { __id__: 0 }, fileId: 'titleFileId', instance: null },
+  ];
+  fs.writeFileSync(nestedPath, JSON.stringify(nestedData));
+  fs.writeFileSync(nestedPath + '.meta', JSON.stringify({ uuid: nestedUuid }));
+
+  const hostPath = path.join(project, 'assets', 'host.prefab');
+  const hostData = [
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Host', _parent: null, _children: [{ __id__: 2 }], _components: [], _prefab: { __id__: 5 } },
+    { __type__: 'cc.Node', _parent: { __id__: 1 }, _prefab: { __id__: 3 } },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, asset: { __uuid__: nestedUuid, __expectedType__: 'cc.Prefab' }, fileId: 'stubFileId', instance: { __id__: 4 } },
+    { __type__: 'cc.PrefabInstance', fileId: 'instFileId', prefabRootNode: { __id__: 1 }, mountedChildren: [], mountedComponents: [], propertyOverrides: [], removedComponents: [] },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'hostRootFileId', instance: null, targetOverrides: null, nestedPrefabInstanceRoots: [{ __id__: 2 }] },
+  ];
+  fs.writeFileSync(hostPath, JSON.stringify(hostData));
+
+  const chain = resolveLocalIdChain(hostPath, hostData, 2, 'cc.Label', ['content', 'title']);
+  assert.deepEqual(chain, ['labelTitleFileId'], '普通子节点路径应解析到 title 的 Label fileId');
+});
+
+test('set-component-ref: 同 source/property/target 不同 localID 时覆盖旧 targetInfo', () => {
+  const data = [
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 6 }], _prefab: { __id__: 3 } },
+    { __type__: 'cc.Node', _name: null, _parent: { __id__: 1 }, _prefab: { __id__: 4 } },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'rootFileId', instance: null, targetOverrides: [{ __id__: 8 }], nestedPrefabInstanceRoots: [{ __id__: 2 }] },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, asset: { __uuid__: 'nested' }, fileId: 'stubFileId', instance: { __id__: 5 } },
+    { __type__: 'cc.PrefabInstance', fileId: 'instFileId', prefabRootNode: { __id__: 1 }, mountedChildren: [], mountedComponents: [], propertyOverrides: [], removedComponents: [] },
+    { __type__: 'SomeComp', node: { __id__: 1 }, __prefab: { __id__: 7 } },
+    { __type__: 'cc.CompPrefabInfo', fileId: 'sourceCompFileId' },
+    { __type__: 'cc.TargetOverrideInfo', source: { __id__: 6 }, sourceInfo: null, propertyPath: ['_reddot'], target: { __id__: 2 }, targetInfo: { __id__: 9 } },
+    { __type__: 'cc.TargetInfo', localID: ['oldNodeFileId'] },
+  ];
+  const prefabData = { elements: data };
+
+  addRootTargetOverride(prefabData, 1, 6, ['_reddot'], 2, ['newComponentFileId']);
+
+  const rootPi = data[3];
+  assert.equal(rootPi.targetOverrides.length, 1, '同字段覆盖不应新增重复 override');
+  const override = data[rootPi.targetOverrides[0].__id__];
+  const targetInfo = data[override.targetInfo.__id__];
+  assert.deepEqual(targetInfo.localID, ['newComponentFileId'], 'localID 应被覆盖为新的组件 fileId');
 });
 
 // ─── clone-node ───────────────────────────────────────────────

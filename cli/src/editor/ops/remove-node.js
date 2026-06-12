@@ -2,6 +2,7 @@
 // 并递归断开整棵子树所有节点/组件的 _parent 引用。
 // 节点元素本身保留在数组（保持其他 __id__ 稳定）。
 // op: { op: 'remove-node', target: string|{id:N} }
+// 兼容旧文档写法：{ op: 'remove-node', node: string|{id:N} }
 
 'use strict';
 
@@ -15,7 +16,10 @@ const {
 
 function execRemoveNode(prefabData, op) {
   const { elements, rootId } = prefabData;
-  const { target: targetSelector } = op;
+  const targetSelector = op.target !== undefined ? op.target : op.node;
+  if (targetSelector === undefined) {
+    throw new Error(`editPrefab [remove-node]: 缺少 target（兼容旧写法 node）`);
+  }
 
   const { node: targetNode, nodeId: targetId } = resolveNode(prefabData, targetSelector, 'remove-node');
 

@@ -82,6 +82,89 @@ function getNestedCompFileId(hostPrefabPath, elements, stubNodeId, compType, nod
   );
 }
 
+function _findNestedNodeByPath(nEls, pathParts) {
+  if (!Array.isArray(pathParts) || pathParts.length === 0) return null;
+  let currentId = null;
+  for (let i = 0; i < nEls.length; i++) {
+    const el = nEls[i];
+    if (!el || el.__type__ !== 'cc.Node') continue;
+    if (el._parent !== null && el._parent !== undefined) continue;
+    if (el._name === pathParts[0]) {
+      currentId = i;
+      break;
+    }
+  }
+  if (currentId === null) {
+    for (let i = 0; i < nEls.length; i++) {
+      const el = nEls[i];
+      if (el && el.__type__ === 'cc.Node' && el._name === pathParts[0]) {
+        currentId = i;
+        break;
+      }
+    }
+  }
+  if (currentId === null) return null;
+
+  for (let partIdx = 1; partIdx < pathParts.length; partIdx++) {
+    const current = nEls[currentId];
+    const children = Array.isArray(current._children) ? current._children : [];
+    let nextId = null;
+    for (const childRef of children) {
+      if (!childRef || typeof childRef.__id__ !== 'number') continue;
+      const child = nEls[childRef.__id__];
+      if (child && child.__type__ === 'cc.Node' && child._name === pathParts[partIdx]) {
+        nextId = childRef.__id__;
+        break;
+      }
+    }
+    if (nextId === null) return null;
+    currentId = nextId;
+  }
+  return { node: nEls[currentId], nodeId: currentId };
+}
+
+function _getNestedNodeFileIdByPath(hostPrefabPath, elements, stubNodeId, pathParts) {
+  const { nestedPath, nestedData } = _loadNestedPrefab(hostPrefabPath, elements, stubNodeId);
+  const nEls = nestedData.elements;
+  const found = _findNestedNodeByPath(nEls, pathParts);
+  if (!found) {
+    throw new Error(`getNestedNodeFileIdByPath: 在嵌套 prefab "${nestedPath}" 中找不到路径 "${pathParts.join('/')}"`);
+  }
+  const node = found.node;
+  if (!node._prefab || typeof node._prefab.__id__ !== 'number') {
+    throw new Error(`getNestedNodeFileIdByPath: 路径 "${pathParts.join('/')}" 的节点没有 PrefabInfo`);
+  }
+  const pi = nEls[node._prefab.__id__];
+  if (!pi || pi.__type__ !== 'cc.PrefabInfo' || typeof pi.fileId !== 'string' || pi.fileId.length === 0) {
+    throw new Error(`getNestedNodeFileIdByPath: 路径 "${pathParts.join('/')}" 的节点没有有效 fileId`);
+  }
+  return pi.fileId;
+}
+
+function _getNestedCompFileIdByPath(hostPrefabPath, elements, stubNodeId, compType, pathParts) {
+  const { nestedPath, nestedData } = _loadNestedPrefab(hostPrefabPath, elements, stubNodeId);
+  const nEls = nestedData.elements;
+  const found = _findNestedNodeByPath(nEls, pathParts);
+  if (!found) {
+    throw new Error(`getNestedCompFileIdByPath: 在嵌套 prefab "${nestedPath}" 中找不到路径 "${pathParts.join('/')}"`);
+  }
+  const comps = Array.isArray(found.node._components) ? found.node._components : [];
+  for (const compRef of comps) {
+    if (!compRef || typeof compRef.__id__ !== 'number') continue;
+    const comp = nEls[compRef.__id__];
+    if (!comp || comp.__type__ !== compType) continue;
+    if (!comp.__prefab || typeof comp.__prefab.__id__ !== 'number') continue;
+    const cpi = nEls[comp.__prefab.__id__];
+    if (!cpi || cpi.__type__ !== 'cc.CompPrefabInfo') continue;
+    if (typeof cpi.fileId !== 'string' || cpi.fileId.length === 0) continue;
+    return cpi.fileId;
+  }
+  throw new Error(
+    `getNestedCompFileIdByPath: 嵌套 prefab "${nestedPath}" 的路径 "${pathParts.join('/')}" ` +
+    `找不到 ${compType} 组件，或该组件没有 cc.CompPrefabInfo.fileId。`
+  );
+}
+
 // ─── 嵌套 prefab：找目标节点的 PrefabInfo.fileId ──────────────
 
 /**
@@ -267,6 +350,15 @@ function resolveLocalIdChain(hostPrefabPath, elements, stubNodeId, compType, sub
     return resolveLocalIdChain(hostPrefabPath, elements, stubNodeId, compType, subNode[0]);
   }
 
+  try {
+    if (compType === 'cc.Node') {
+      return [_getNestedNodeFileIdByPath(hostPrefabPath, elements, stubNodeId, subNode)];
+    }
+    return [_getNestedCompFileIdByPath(hostPrefabPath, elements, stubNodeId, compType, subNode)];
+  } catch (_) {
+    // 不是普通子节点路径时，继续沿用旧语义：数组表示多层 nested stub 链。
+  }
+
   // 多层：从当前 stub 进入第一层嵌套，找名字 = subNode[0] 的内嵌 stub，
   // 拿到它在嵌套 prefab 内的 fileId，递归走剩下的路径
   const [firstSeg, ...restPath] = subNode;
@@ -382,6 +474,8 @@ function addRootTargetOverride(prefabData, rootId, sourceCompId, propertyPath, t
     if (!ti || !Array.isArray(ti.localID)) continue;
     if (ti.localID.length !== localIdChain.length) continue;
     if (ti.localID.every((v, i) => v === localIdChain[i])) return;
+    ti.localID = localIdChain.slice();
+    return;
   }
 
   const targetInfoId = elements.length;

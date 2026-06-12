@@ -72,7 +72,7 @@ node extensions/cc-3-8-x-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 加嵌套 prefab 实例（stub） | `add-nested-prefab`（parent + prefabUuid + name? + lpos?） |
 | 给 Spine 增加/更新 socket 绑定 | `add-spine-socket`（node + path + target；同 path 幂等更新 target） |
 | 替换嵌套 prefab 的 asset uuid（保留 stub 结构） | `replace-nested-prefab`（target + prefabUuid + clearOverrides?） |
-| 删节点 | `remove-node` |
+| 删节点 | `remove-node`（`target` / 旧写法 `node` 都支持；软删保留孤儿元素以稳定 `__id__`） |
 | 清悬空嵌套实例根（删了一半的 prefab 残留：父引用没了但根 PrefabInfo 登记还在，残留 asset 仍被加载 → 404）| `sync-nested-roots`（无参，重建根 nestedPrefabInstanceRoots） |
 | 复制节点 | `clone-node` |
 | 加组件 | `add-component` |
@@ -81,7 +81,8 @@ node extensions/cc-3-8-x-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 给脚本 @property 挂节点引用 | `set-component-ref`（refType=`cc.Node`） |
 | 给脚本 @property 挂组件引用 | `set-component-ref`（refType=`cc.Button` 等） |
 | 给脚本 @property 挂 stub 内组件 | `set-component-ref`（refNode 是 stub，自动走 TargetOverrideInfo） |
-| 给脚本 @property 挂多层嵌套 stub 内组件 | `set-component-ref`（refSubNode 用字符串数组 `["A","B"]`） |
+| 给脚本 @property 挂嵌套 prefab 内子节点组件 | `set-component-ref`（refSubNode 可用节点名 `"title"` 或普通路径数组 `["content","title"]`） |
+| 给脚本 @property 挂多层嵌套 stub 内组件 | `set-component-ref`（普通路径找不到时，refSubNode 字符串数组继续按多层 stub 链 `["A","B"]` 解析） |
 | 给脚本 @property **数组字段** 按索引挂载（`_items[0]`/`_items[1]`…） | `set-component-ref`（property 写 `"_items.0"` 或 `"_items[0]"`，多次调用各索引共存） |
 | 合并同节点重复组件（cli 字符串版 + 编辑器压缩版） | `dedupe-component` |
 

@@ -112,7 +112,7 @@ const SCHEMAS = {
   'reorder-children':        { required: ['node', 'order'],                        optional: [] },
   // add-node 的 node 是「新节点描述对象」而非 selector
   'add-node':                { required: ['parent', 'node'],                       optional: [], typeOverrides: { node: 'object' } },
-  'remove-node':             { required: ['target'],                               optional: [] },
+  'remove-node':             { required: [],                                       optional: ['target', 'node'] },
   'clone-node':              { required: ['source', 'parent', 'name'],             optional: [] },
   'add-component':           { required: ['node', 'componentType'],                optional: ['props'] },
   'remove-component':        { required: ['node', 'componentType'],                optional: [] },
